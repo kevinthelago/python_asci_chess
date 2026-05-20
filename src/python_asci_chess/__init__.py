@@ -89,7 +89,26 @@ class Chess:
             self.error = ""
 
     def to_fen_string(self):
-        return self
+        fen_type_map = {v: k for k, v in self.fen_map.items()}
+        parts = []
+        for row in self.board:
+            rank_str = ""
+            empty = 0
+            for square in row:
+                p = square.piece
+                if p is None:
+                    empty += 1
+                else:
+                    if empty:
+                        rank_str += str(empty)
+                        empty = 0
+                    piece_type = p.piece - (WHITE if p.piece & WHITE == WHITE else BLACK)
+                    letter = fen_type_map[piece_type]
+                    rank_str += letter.upper() if p.piece & WHITE == WHITE else letter
+            if empty:
+                rank_str += str(empty)
+            parts.append(rank_str)
+        return "/".join(parts)
 
     def from_fen_string(self, string):
         i = 0

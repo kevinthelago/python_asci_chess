@@ -67,3 +67,24 @@ class TestFromFenString:
         for col in range(8):
             if col != 4:
                 assert piece_int(g, 7, col) is None
+
+
+class TestToFenString:
+    def test_starting_position_round_trip(self):
+        g = make_game()
+        assert g.to_fen_string() == g.starting_position
+
+    def test_empty_board(self):
+        g = Chess()
+        assert g.to_fen_string() == "8/8/8/8/8/8/8/8"
+
+    def test_single_piece(self):
+        g = Chess()
+        g.from_fen_string("8/8/8/8/8/8/8/4K3")
+        assert g.to_fen_string() == "8/8/8/8/8/8/8/4K3"
+
+    def test_mixed_pieces(self):
+        g = Chess()
+        fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"
+        g.from_fen_string(fen)
+        assert g.to_fen_string() == fen
