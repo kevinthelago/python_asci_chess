@@ -47,7 +47,194 @@ class Chess:
         self.board = [[Square(j, i) for j in range(8)] for i in range(8)]
         self.files = [column.get_file() for column in self.board[0]]
         self.ranks = [i + 1 for i in range(len(self.board))]
+        self.player = WHITE
+        self.castling_rights = {'K': True, 'Q': True, 'k': True, 'q': True}
+        self.en_passant_target = None  # (row, col) of the capturable square
+        self.move_history = []
         self.error = ""
+
+    # ── low-level board helpers ──────────────────────────────────────────────
+
+    def _sq(self, row, col):
+        """Piece integer at (row, col), or None."""
+        p = self.board[row][col].piece
+        return p.piece if p is not None else None
+
+    def _set_sq(self, row, col, piece_int):
+        self.board[row][col].piece = Piece(piece_int) if piece_int is not None else None
+
+    @staticmethod
+    def _color(piece_int):
+        return WHITE if piece_int & WHITE == WHITE else BLACK
+
+    @staticmethod
+    def _type(piece_int):
+        """Extract piece type (KING..PAWN) from encoded integer."""
+        return piece_int & 7
+
+    def _is_enemy(self, piece_int, color):
+        return piece_int is not None and self._color(piece_int) != color
+
+    def _is_empty(self, row, col):
+        return self._sq(row, col) is None
+
+    @staticmethod
+    def _in_bounds(row, col):
+        return 0 <= row < 8 and 0 <= col < 8
+
+    def _find_king(self, color):
+        target = KING | color
+        for r in range(8):
+            for c in range(8):
+                if self._sq(r, c) == target:
+                    return r, c
+        return None, None
+
+    # ── pseudo-legal move generators ─────────────────────────────────────────
+
+    def _pseudo_legal_moves(self, row, col):
+        """All moves for the piece at (row, col), ignoring check. Excludes castling."""
+        piece_int = self._sq(row, col)
+        if piece_int is None:
+            return []
+        color = self._color(piece_int)
+        pt = self._type(piece_int)
+        if pt == PAWN:
+            return self._pawn_moves(row, col, color)
+        if pt == KNIGHT:
+            return self._knight_moves(row, col, color)
+        if pt == BISHOP:
+            return self._sliding_moves(row, col, color, ((-1,-1),(-1,1),(1,-1),(1,1)))
+        if pt == ROOK:
+            return self._sliding_moves(row, col, color, ((-1,0),(1,0),(0,-1),(0,1)))
+        if pt == QUEEN:
+            return (self._sliding_moves(row, col, color, ((-1,-1),(-1,1),(1,-1),(1,1))) +
+                    self._sliding_moves(row, col, color, ((-1,0),(1,0),(0,-1),(0,1))))
+        if pt == KING:
+            return self._king_moves(row, col, color)
+        return []
+
+    def _pawn_moves(self, row, col, color):
+        moves = []
+        direction = -1 if color == WHITE else 1
+        start_row = 6 if color == WHITE else 1
+        fwd = row + direction
+
+        if not self._in_bounds(fwd, col):
+            return moves
+
+        if self._is_empty(fwd, col):
+            moves.append((fwd, col))
+            fwd2 = row + 2 * direction
+            if row == start_row and self._in_bounds(fwd2, col) and self._is_empty(fwd2, col):
+                moves.append((fwd2, col))
+
+        for dc in (-1, 1):
+            nc = col + dc
+            if self._in_bounds(fwd, nc):
+                target = self._sq(fwd, nc)
+                if target is not None and self._is_enemy(target, color):
+                    moves.append((fwd, nc))
+                elif self.en_passant_target == (fwd, nc):
+                    moves.append((fwd, nc))
+        return moves
+
+    def _knight_moves(self, row, col, color):
+        moves = []
+        for dr, dc in ((-2,-1),(-2,1),(-1,-2),(-1,2),(1,-2),(1,2),(2,-1),(2,1)):
+            nr, nc = row + dr, col + dc
+            if self._in_bounds(nr, nc):
+                target = self._sq(nr, nc)
+                if target is None or self._is_enemy(target, color):
+                    moves.append((nr, nc))
+        return moves
+
+    def _sliding_moves(self, row, col, color, directions):
+        moves = []
+        for dr, dc in directions:
+            nr, nc = row + dr, col + dc
+            while self._in_bounds(nr, nc):
+                target = self._sq(nr, nc)
+                if target is None:
+                    moves.append((nr, nc))
+                elif self._is_enemy(target, color):
+                    moves.append((nr, nc))
+                    break
+                else:
+                    break
+                nr += dr
+                nc += dc
+        return moves
+
+    def _king_moves(self, row, col, color):
+        moves = []
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = row + dr, col + dc
+                if self._in_bounds(nr, nc):
+                    target = self._sq(nr, nc)
+                    if target is None or self._is_enemy(target, color):
+                        moves.append((nr, nc))
+        return moves
+
+    # ── legal move filtering ──────────────────────────────────────────────────
+
+    def _would_be_in_check(self, from_r, from_c, to_r, to_c):
+        """Return True if making this move would leave own king in check."""
+        piece_int = self._sq(from_r, from_c)
+        color = self._color(piece_int)
+
+        orig_dst = self._sq(to_r, to_c)
+        ep_pos = None
+        ep_piece = None
+
+        # En passant: the captured pawn is not on the destination square
+        if self._type(piece_int) == PAWN and to_c != from_c and orig_dst is None:
+            ep_pos = (from_r, to_c)
+            ep_piece = self._sq(from_r, to_c)
+            self._set_sq(from_r, to_c, None)
+
+        self._set_sq(to_r, to_c, piece_int)
+        self._set_sq(from_r, from_c, None)
+        in_check = self.is_in_check(color)
+        self._set_sq(from_r, from_c, piece_int)
+        self._set_sq(to_r, to_c, orig_dst)
+        if ep_pos:
+            self._set_sq(ep_pos[0], ep_pos[1], ep_piece)
+
+        return in_check
+
+    def is_in_check(self, color):
+        king_r, king_c = self._find_king(color)
+        if king_r is None:
+            return False
+        opponent = BLACK if color == WHITE else WHITE
+        for r in range(8):
+            for c in range(8):
+                p = self._sq(r, c)
+                if p is not None and self._color(p) == opponent:
+                    if (king_r, king_c) in self._pseudo_legal_moves(r, c):
+                        return True
+        return False
+
+    def get_legal_moves(self, row, col):
+        """All fully legal moves for the piece at (row, col)."""
+        legal = []
+        for move in self._pseudo_legal_moves(row, col):
+            if not self._would_be_in_check(row, col, *move):
+                legal.append(move)
+        return legal
+
+    def _has_legal_moves(self, color):
+        for r in range(8):
+            for c in range(8):
+                p = self._sq(r, c)
+                if p is not None and self._color(p) == color:
+                    if self.get_legal_moves(r, c):
+                        return True
+        return False
 
     def play(self):
         print(chess.to_string())  # <-- ToDo: Figure out why colors are weird in bash; render twice = bad
