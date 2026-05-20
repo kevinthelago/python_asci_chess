@@ -102,7 +102,7 @@ class Chess:
                 continue
             elif character == "8":
                 continue
-            elif not can_cast.to_int(string):
+            elif not can_cast.to_int(character):
                 piece = Piece(
                     self.fen_map.get(character.lower()) +
                     (16 if character.isupper() else 8)
@@ -110,7 +110,7 @@ class Chess:
                 self.board[i][j].set_piece(piece)
                 j += 1
             else:
-                j += int(string)
+                j += int(character)
 
     def to_string(self):
         if self.player & WHITE != WHITE:
