@@ -314,11 +314,28 @@ class Chess:
         while True:
             os.system(CLEAR_COMMAND)
             print(self.to_string())
+
+            # Check / checkmate / stalemate detection after every move
+            in_check = self.is_in_check(self.player)
+            has_moves = self._has_legal_moves(self.player)
+            turn_label = "White" if self.player == WHITE else "Black"
+
+            if in_check and not has_moves:
+                winner = "Black" if self.player == WHITE else "White"
+                print(f"Checkmate! {winner} wins in {len(self.move_history)} moves.")
+                self._show_game_over()
+                return
+            if not in_check and not has_moves:
+                print(f"Stalemate! The game is a draw after {len(self.move_history)} moves.")
+                self._show_game_over()
+                return
+            if in_check:
+                print("Check!")
+
             if self.error:
                 print(self.error)
                 self.error = ""
 
-            turn_label = "White" if self.player == WHITE else "Black"
             from_input = input(f"{turn_label} — select a piece (e.g. e2): ").strip().lower()
 
             if from_input == "resign":
@@ -373,6 +390,22 @@ class Chess:
                         print("Enter q, r, b, or n.")
 
             self.apply_move(from_r, from_c, to_r, to_c, promotion_type=promotion)
+
+    def _show_game_over(self):
+        print("\nMove history:")
+        for i, (fr, fc, tr, tc) in enumerate(self.move_history):
+            move_str = f"{self._to_notation(fr, fc)}-{self._to_notation(tr, tc)}"
+            if i % 2 == 0:
+                print(f"  {i // 2 + 1}. {move_str}", end="")
+            else:
+                print(f"  {move_str}")
+        if len(self.move_history) % 2 == 1:
+            print()
+        again = input("\nPlay again? (y/n): ").strip().lower()
+        if again == "y":
+            new_game = Chess(self.color_scheme)
+            new_game.from_fen_string(Chess.starting_position)
+            new_game.play()
 
     def to_string(self, highlighted=None):
         """Render the board. highlighted is an optional list of (row, col) targets."""
