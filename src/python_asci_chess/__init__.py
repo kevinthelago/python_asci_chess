@@ -224,12 +224,44 @@ class Chess:
                         return True
         return False
 
+    def _castling_moves(self, row, col, color):
+        """Legal castling moves for the king at (row, col)."""
+        moves = []
+        if self.is_in_check(color):
+            return moves  # Cannot castle while in check
+
+        cr = self.castling_rights
+        rook = ROOK | color
+        king_col = col  # Must be on the e-file starting square
+
+        def safe_passage(r, cols):
+            return all(not self._would_be_in_check(row, king_col, r, c) for c in cols)
+
+        if color == WHITE and row == 7 and king_col == 4:
+            if cr['K'] and self._is_empty(7,5) and self._is_empty(7,6) and self._sq(7,7) == rook:
+                if safe_passage(7, (5, 6)):
+                    moves.append((7, 6))
+            if cr['Q'] and self._is_empty(7,3) and self._is_empty(7,2) and self._is_empty(7,1) and self._sq(7,0) == rook:
+                if safe_passage(7, (3, 2)):
+                    moves.append((7, 2))
+        elif color == BLACK and row == 0 and king_col == 4:
+            if cr['k'] and self._is_empty(0,5) and self._is_empty(0,6) and self._sq(0,7) == rook:
+                if safe_passage(0, (5, 6)):
+                    moves.append((0, 6))
+            if cr['q'] and self._is_empty(0,3) and self._is_empty(0,2) and self._is_empty(0,1) and self._sq(0,0) == rook:
+                if safe_passage(0, (3, 2)):
+                    moves.append((0, 2))
+        return moves
+
     def get_legal_moves(self, row, col):
-        """All fully legal moves for the piece at (row, col)."""
+        """All fully legal moves for the piece at (row, col), including castling."""
         legal = []
         for move in self._pseudo_legal_moves(row, col):
             if not self._would_be_in_check(row, col, *move):
                 legal.append(move)
+        piece_int = self._sq(row, col)
+        if piece_int is not None and self._type(piece_int) == KING:
+            legal.extend(self._castling_moves(row, col, self._color(piece_int)))
         return legal
 
     def _has_legal_moves(self, color):
