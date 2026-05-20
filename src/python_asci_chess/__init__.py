@@ -16,21 +16,26 @@ WHITE = 16  # 10 0000
 
 CLEAR_COMMAND = 'cls' if os.name in ('nt', 'dos') else 'clear'
 
-EMPTY_SPACE = " "
-SPACE = " "
+EMPTY_SPACE = " "
+SPACE = " "
 
 BLACK_AND_WHITE_COLOR_SCHEME = {
-    0: "\033[48;2;200;200;200;38;2;255;255;255m",  # 00
-    1: "\033[48;2;50;50;50;38;2;255;255;255m",     # 01
-    2: "\033[48;2;200;200;200;38;2;0;0;0m",        # 10
-    3: "\033[48;2;50;50;50;38;2;0;0;0m",           # 11
-    None: "\033[48;2;0;0;0;38;2;50;255;255m"
+    # square_color + piece_color_offset (0=white piece, 2=black piece)
+    0: "\033[48;2;200;200;200;38;2;255;255;255m",   # light sq, white piece
+    1: "\033[48;2;50;50;50;38;2;255;255;255m",      # dark sq, white piece
+    2: "\033[48;2;200;200;200;38;2;0;0;0m",         # light sq, black piece
+    3: "\033[48;2;50;50;50;38;2;0;0;0m",            # dark sq, black piece
+    # +4 offset for highlighted squares (legal move targets)
+    4: "\033[48;2;130;210;130;38;2;255;255;255m",   # highlighted light sq, white piece
+    5: "\033[48;2;80;160;80;38;2;255;255;255m",     # highlighted dark sq, white piece
+    6: "\033[48;2;130;210;130;38;2;0;0;0m",         # highlighted light sq, black piece
+    7: "\033[48;2;80;160;80;38;2;0;0;0m",           # highlighted dark sq, black piece
+    None: "\033[0m"                                  # reset
 }
 
 
 class Chess:
     starting_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
-    player = WHITE
     fen_map = {
         'k': 1,
         'q': 2,
@@ -236,44 +241,172 @@ class Chess:
                         return True
         return False
 
-    def play(self):
-        print(chess.to_string())  # <-- ToDo: Figure out why colors are weird in bash; render twice = bad
+    # ── coordinate helpers ────────────────────────────────────────────────────
 
+    def _parse_square(self, text):
+        """Convert 'e2' to (row, col), or None if invalid."""
+        if len(text) < 2:
+            return None
+        file_char = text[0].lower()
+        rank_num = safe_cast.to_int(text[1])
+        if file_char not in self.files or rank_num not in self.ranks:
+            return None
+        return 8 - rank_num, self.files.index(file_char)
+
+    def _to_notation(self, row, col):
+        return f"{self.files[col]}{8 - row}"
+
+    # ── move application ──────────────────────────────────────────────────────
+
+    def apply_move(self, from_r, from_c, to_r, to_c, promotion_type=None):
+        """Apply a move, update castling rights, en passant target, and turn."""
+        piece_int = self._sq(from_r, from_c)
+        pt = self._type(piece_int)
+        color = self._color(piece_int)
+
+        # En passant capture: remove the pawn that is not on destination square
+        if pt == PAWN and to_c != from_c and self._is_empty(to_r, to_c):
+            self._set_sq(from_r, to_c, None)
+
+        self._set_sq(to_r, to_c, piece_int)
+        self._set_sq(from_r, from_c, None)
+
+        # Castling: also move the rook
+        if pt == KING and abs(to_c - from_c) == 2:
+            if to_c == 6:   # kingside
+                self._set_sq(to_r, 5, self._sq(to_r, 7))
+                self._set_sq(to_r, 7, None)
+            else:           # queenside
+                self._set_sq(to_r, 3, self._sq(to_r, 0))
+                self._set_sq(to_r, 0, None)
+
+        # Update en passant target
+        if pt == PAWN and abs(to_r - from_r) == 2:
+            self.en_passant_target = ((from_r + to_r) // 2, to_c)
+        else:
+            self.en_passant_target = None
+
+        # Revoke castling rights
+        if pt == KING:
+            if color == WHITE:
+                self.castling_rights['K'] = self.castling_rights['Q'] = False
+            else:
+                self.castling_rights['k'] = self.castling_rights['q'] = False
+        elif pt == ROOK:
+            revoke = {(7, 7): 'K', (7, 0): 'Q', (0, 7): 'k', (0, 0): 'q'}
+            key = revoke.get((from_r, from_c))
+            if key:
+                self.castling_rights[key] = False
+
+        # Pawn promotion
+        if pt == PAWN:
+            if color == WHITE and to_r == 0:
+                self._set_sq(to_r, to_c, (promotion_type or QUEEN) | WHITE)
+            elif color == BLACK and to_r == 7:
+                self._set_sq(to_r, to_c, (promotion_type or QUEEN) | BLACK)
+
+        self.move_history.append((from_r, from_c, to_r, to_c))
+        self.player = BLACK if self.player == WHITE else WHITE
+
+    # ── game loop ─────────────────────────────────────────────────────────────
+
+    def play(self):
         while True:
             os.system(CLEAR_COMMAND)
+            print(self.to_string())
+            if self.error:
+                print(self.error)
+                self.error = ""
 
-            print(chess.to_string())
-            print(self.error)
-            piece = input("Select a piece: ")
+            turn_label = "White" if self.player == WHITE else "Black"
+            from_input = input(f"{turn_label} — select a piece (e.g. e2): ").strip().lower()
 
-            if piece[:1] not in self.fen_map.keys():
-                self.error = f"Not a correct piece selection. Please select from these options: {' '.join(self.fen_map.keys())}"
-                continue
-            if piece[1:2] not in self.files:
-                self.error = f"Not a correct file selection. Please select from these options: {self.files}"
-                continue
-            if safe_cast.to_int(piece[2:3]) not in self.ranks:
-                self.error = f"Not a correct rank selection. Please select from these options: {self.ranks}"
-                continue
+            if from_input == "resign":
+                winner = "Black" if self.player == WHITE else "White"
+                print(f"{turn_label} resigns. {winner} wins!")
+                return
 
-            starting_square = self.board[safe_cast.to_int(piece[2:3]) - 1][self.files.index(piece[1:2])]
-            # ToDo:
-            #  Grab square from matrix
-            #  verify piece selection
-            #  calculate legal moves
-
-            square = input("Select a square or type ca to ca: ")
-
-            if square[:2] == "ca":
-                continue
-            if square[:1] not in self.files:
-                self.error = f"Not a correct file selection. Please select from these options: {self.files}"
-                continue
-            if safe_cast.to_int(square[1:2]) not in self.ranks:
-                self.error = f"Not a correct rank selection. Please select from these options: {self.ranks}"
+            pos = self._parse_square(from_input)
+            if pos is None:
+                self.error = "Invalid square — enter like 'e2'."
                 continue
 
-            self.error = ""
+            from_r, from_c = pos
+            piece_int = self._sq(from_r, from_c)
+
+            if piece_int is None:
+                self.error = "No piece on that square."
+                continue
+            if self._color(piece_int) != self.player:
+                self.error = "That piece belongs to your opponent."
+                continue
+
+            legal = self.get_legal_moves(from_r, from_c)
+            if not legal:
+                self.error = "That piece has no legal moves."
+                continue
+
+            os.system(CLEAR_COMMAND)
+            print(self.to_string(highlighted=legal))
+            hints = ", ".join(self._to_notation(r, c) for r, c in sorted(legal))
+            print(f"Legal moves: {hints}  (type 'ca' to cancel)")
+            to_input = input("Select destination: ").strip().lower()
+
+            if to_input == "ca":
+                continue
+
+            dest = self._parse_square(to_input)
+            if dest is None or dest not in legal:
+                self.error = "Invalid or illegal destination."
+                continue
+
+            to_r, to_c = dest
+            promotion = None
+            if self._type(piece_int) == PAWN:
+                if (self.player == WHITE and to_r == 0) or (self.player == BLACK and to_r == 7):
+                    promo_map = {'q': QUEEN, 'r': ROOK, 'b': BISHOP, 'n': KNIGHT}
+                    while True:
+                        p = input("Promote pawn to (q/r/b/n): ").strip().lower()
+                        if p in promo_map:
+                            promotion = promo_map[p]
+                            break
+                        print("Enter q, r, b, or n.")
+
+            self.apply_move(from_r, from_c, to_r, to_c, promotion_type=promotion)
+
+    def to_string(self, highlighted=None):
+        """Render the board. highlighted is an optional list of (row, col) targets."""
+        hl_set = set(highlighted) if highlighted else set()
+        reset = self.color_scheme[None]
+
+        # Determine display order without mutating self.board
+        white_view = self.player == WHITE
+        row_order = range(8) if white_view else range(7, -1, -1)
+        col_order = range(8) if white_view else range(7, -1, -1)
+
+        out = ""
+        for i in row_order:
+            row = self.board[i]
+            for display_j, j in enumerate(col_order):
+                sq = row[j]
+                piece_int = self._sq(i, j)
+                piece_color_offset = 0 if (piece_int is None or self._color(piece_int) == WHITE) else 2
+                hl_offset = 4 if (i, j) in hl_set else 0
+                color = self.color_scheme.get(piece_color_offset + sq.color + hl_offset)
+
+                if display_j == 0:
+                    out += reset + f"{8 - i} "
+
+                out += color + sq.get_piece().to_pretty_string() + reset
+
+            out += "\n"
+
+        # File labels
+        out += reset + "   "
+        for j in col_order:
+            out += f"{self.files[j]}  "
+
+        return out
 
     def to_fen_string(self):
         fen_type_map = {v: k for k, v in self.fen_map.items()}
@@ -317,37 +450,6 @@ class Chess:
                 j += 1
             else:
                 j += int(character)
-
-    def to_string(self):
-        if self.player & WHITE != WHITE:
-            self.board.reverse()
-            for rank in self.board:
-                rank.reverse()
-
-        board = ""
-        reset_color = self.color_scheme.get(None)
-
-        for i, row in enumerate(self.board):
-            for j, column in enumerate(row):
-                piece_color = 0
-                if column.get_piece() is not None:
-                    piece_color = column.get_piece().get_color() << 1
-                color = self.color_scheme.get(piece_color + column.color)
-
-                if j == 0:
-                    board += reset_color + f"{row[0].get_rank()} "
-
-                board += color + column.get_piece().to_pretty_string() + reset_color
-
-            board += "\n" + reset_color
-
-            if i == 7:
-                for j in range(8):
-                    if j == 0:
-                        board += " 　"
-                    board += reset_color + f"{self.board[i][j].get_file()}　"
-
-        return board
 
 
 class Piece:
@@ -402,32 +504,11 @@ class Square:
         self.color = ((x if y % 2 == 0 else x + 1) % 2)
         self.piece = piece
         self.alphabet_map = {
-            1: 'a',
-            2: 'b',
-            3: 'c',
-            4: 'd',
-            5: 'e',
-            6: 'f',
-            7: 'g',
-            8: 'h',
-            9: 'i',
-            10: 'j',
-            11: 'k',
-            12: 'l',
-            13: 'm',
-            14: 'n',
-            15: 'o',
-            16: 'p',
-            17: 'q',
-            18: 'r',
-            19: 's',
-            20: 't',
-            21: 'u',
-            22: 'v',
-            23: 'w',
-            24: 'x',
-            25: 'y',
-            26: 'z',
+            1: 'a', 2: 'b', 3: 'c', 4: 'd', 5: 'e',
+            6: 'f', 7: 'g', 8: 'h', 9: 'i', 10: 'j',
+            11: 'k', 12: 'l', 13: 'm', 14: 'n', 15: 'o',
+            16: 'p', 17: 'q', 18: 'r', 19: 's', 20: 't',
+            21: 'u', 22: 'v', 23: 'w', 24: 'x', 25: 'y', 26: 'z',
         }
 
     def get_file(self):
@@ -437,7 +518,6 @@ class Square:
         return 8 - self.y
 
     def get_piece(self):
-        # ToDo: See if this affects memory
         if self.piece is None:
             return Piece()
         return self.piece
